@@ -8,6 +8,23 @@
 #include <iterator>
 #include <map>
 
+struct orderStruct{
+    float price;
+    bool buy;
+    int quantity;
+    std::string timestamp;
+    std::string code; 
+    bool resting;
+};
+
+
+struct lookup_node{
+    bool buy;
+    float pricelevel;
+    std::list<orderStruct>::iterator iter;
+};
+
+
 
 class LOB{
     private: 
@@ -21,7 +38,9 @@ class LOB{
     void add_order(orderStruct order);
     void destroy_order(std::string code);
     orderStruct get_order(std::string code);
-    orderStruct get_first_order(double pricelevel, bool buytrue);
+   
+    orderStruct get_sell_first_order(double pricelevel);
+    orderStruct get_buy_first_order(double pricelevel);
     void edit_order(orderStruct neworder);
     void partial_fill(std::string code, int quantfilled);
     double get_highest_buy();
@@ -30,19 +49,6 @@ class LOB{
 
 };
 
-struct orderStruct{
-    float price;
-    bool buy;
-    int quantity;
-    std::string timestamp;
-    std::string code; 
 
-};
-
-struct lookup_node{
-    bool buy;
-    float pricelevel;
-    std::list<orderStruct>::iterator iter;
-};
 
 #endif
