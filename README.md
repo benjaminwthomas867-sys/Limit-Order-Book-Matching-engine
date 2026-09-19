@@ -6,4 +6,4 @@ Run command: ./match_test.exe
 
 Matching_engine_testing.cpp is just a file that I've used to play around with the basics to ensure that the logic works.
 
-Upcoming: error handling and potentially making it into a client-server program where the client can send an order to the server to act as an exchange
+Upcoming: make functions for add_order which are for adding to the buy and sell maps so that the switch isn't needed. error handling and potentially making it into a client-server program where the client can send an order to the server to act as an exchange
