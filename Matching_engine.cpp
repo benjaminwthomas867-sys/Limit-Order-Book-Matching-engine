@@ -1,5 +1,5 @@
 #include "LOB.h"
-Receipt produceReceipt(int quantity, double price_level, std::string resting_id, std::string aggressive_id); 
+
 
 std::list<Receipt> matching_engine(orderStruct new_order,LOB& working_book){
     const int sell = 0;
@@ -55,8 +55,6 @@ std::list<Receipt> matching_engine(orderStruct new_order,LOB& working_book){
         return listofreceipts;
     }else{return listofreceipts;}
     }
-
-
 
 
 
