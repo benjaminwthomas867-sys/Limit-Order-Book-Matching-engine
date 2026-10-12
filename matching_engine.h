@@ -19,8 +19,7 @@ struct Receipt{
         int quantity;
 };
 
-Receipt produceReceipt(int quantity, double price_level, std::string buy_id, std::string sell_id);
-std::string make_timestamp();
+
 
 std::list<Receipt> matching_engine(orderStruct new_order,LOB& working_book);
 
