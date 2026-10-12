@@ -10,16 +10,31 @@
 #include <unordered_map>
 #include <iterator>
 #include <chrono>
+#include "matching_engine.h"
 
-struct orderStruct{
-    std::string person_id;
-    float price;
+struct orderStruct {
+    char person_id[64];
+    double price;
     bool buy;
     int quantity;
     long long timestamp;
-    std::string code; 
+    char code[64]; 
     bool resting = 0;
-    std::string intended_equity;
+    char intended_equity[32];
+
+
+    orderStruct(char person_id1[64], double price1, bool buy1, int quantity1, char intended_equity1[32]){
+        std::strcpy(person_id,person_id1); // convert froms string to char[]
+        price = price1;
+        buy = buy1;
+        quantity = quantity1;
+        std::strcpy(intended_equity,intended_equity1);
+        timestamp = make_timestamp();
+        std::string hash_string = std::format("{}{}{}{}",person_id1,price, buy,quantity,timestamp);
+        hash_string = standard_hash(hash_string);
+        std::strcpy(code, hash_string.c_str());
+
+    }
 };
 
 long long make_timestamp();
@@ -48,9 +63,28 @@ struct Receipt{
 
 struct lookup_node{
     bool buy;
-    float pricelevel;
+    double pricelevel;
     std::list<orderStruct>::iterator iter;
 };
+
+
+struct data_request {
+    int function;
+};
+
+struct fill_details : public data_request {
+    char new_username[64];
+    char hashed_password[256];
+    char DOB[32];
+    char First_name[32];
+    char Second_name[32];
+};
+
+struct login_request : public data_request {
+    char username[64];
+    char password[256];
+};
+
 
 class LOB{
     private: 
@@ -91,8 +125,6 @@ class LOB{
 
 // misc functions
 std::list<Receipt> matching_engine(orderStruct new_order,LOB& working_book);
-
-
 
 
 #endif
