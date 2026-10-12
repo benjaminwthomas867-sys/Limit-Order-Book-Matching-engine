@@ -5,18 +5,33 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <any>
+#include <format>
 #pragma comment(lib, "ws2_32.lib")
 
 // Structs kept exactly as requested
 struct orderStruct {
-    std::string person_id;
-    float price;
+    char person_id[64];
+    double price;
     bool buy;
     int quantity;
     long long timestamp;
-    std::string code; 
+    char code[64]; 
     bool resting = 0;
-    std::string intended_equity;
+    char intended_equity[32];
+
+
+    orderStruct(char person_id1[64], double price1, bool buy1, int quantity1, char intended_equity1[32]){
+        std::strcpy(person_id,person_id1); // convert froms string to char[]
+        price = price1;
+        buy = buy1;
+        quantity = quantity1;
+        std::strcpy(intended_equity,intended_equity1);
+        timestamp = make_timestamp();
+        std::string hash_string = std::format("{}{}{}{}",person_id1,price, buy,quantity,timestamp);
+        hash_string = standard_hash(hash_string);
+        std::strcpy(code, hash_string.c_str());
+
+    }
 };
 
 struct data_request {
@@ -76,7 +91,7 @@ public:
             closesocket(ConnectSocket);
             WSACleanup();
             return -3.0;
-        }
+        } 
 
         iResult = send(ConnectSocket, reinterpret_cast<const char*>(&details), sizeof(T), 0);
         if (iResult == SOCKET_ERROR) {
@@ -106,7 +121,7 @@ public:
 
     double create_login() {
         bool valid_username = false;
-        fill_details new_request{};
+        fill_details new_request;
         new_request.function = 1;     
 
         while (!valid_username) {
@@ -141,7 +156,7 @@ public:
     }
 
     double login() {
-        login_request new_login{};
+        login_request new_login;
         std::cout << "Input your username: ";
         std::cin >> new_login.username;
         std::cout << "Input your password: ";
@@ -215,17 +230,21 @@ public:
         WSACleanup();
         return bytesReceived > 0;
     }
+
 };
 
-Client client1;
+  
+
+
 
 int main() {
+    Client client1;
     int run1 = 0;
     do {
         std::cout << "Input your choice:\n"<< "1 for new login\n"<< "2 for login\n"<< "3 for get bid price\n"<< "4 for get ask price\n"<< "5 for get receipts\n"<< "9 to exit\n ";
         std::cin >> run1;
 
-        switch (run1) {
+        switch(run1) {
             case 1: {
                 double result = client1.create_login();
                 if (result == -1) {
@@ -264,8 +283,7 @@ int main() {
                 }
                 break;
             }
-            case 9:
-                break;
+
             default:
                 std::cout << "Invalid choice, please try again.\n";
                 break;
