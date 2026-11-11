@@ -17,7 +17,22 @@ endif()
 #             plus the library, e.g. -DTBB_ROOT=C:/path/to/oneTBB
 #   Option B: an installed oneTBB found via find_package (vcpkg: `vcpkg install tbb`)
 # ---------------------------------------------------------------------------
+
+# Default to the oneAPI install location; override with -DTBB_DIR=...
+if(NOT TBB_DIR AND NOT DEFINED ENV{TBB_DIR})
+    set(_oneapi_tbb "C:/Program Files (x86)/Intel/oneAPI/tbb/2023.2/lib/cmake/tbb")
+    if(EXISTS "${_oneapi_tbb}/TBBConfig.cmake")
+        set(TBB_DIR "${_oneapi_tbb}" CACHE PATH "Folder containing TBBConfig.cmake")
+    endif()
+endif()
+
 find_package(TBB REQUIRED)
+
+# TBB install root = <root>/lib/cmake/tbb -> go up three levels.
+# Adding it as an include path lets Exchange.cpp's existing
+# #include "include/oneapi/tbb/..." lines resolve without editing the source.
+get_filename_component(TBB_ROOT_DIR "${TBB_DIR}/../../.." ABSOLUTE)
+message(STATUS "TBB found via ${TBB_DIR} (root: ${TBB_ROOT_DIR})")
 
 # ---------------------------------------------------------------------------
 # Shared sources: order book + matching engine + helpers
@@ -33,6 +48,7 @@ target_include_directories(lob_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # Exchange (server, listens on port 8080)
 # ---------------------------------------------------------------------------
 add_executable(Exchange Exchange.cpp)
+target_include_directories(Exchange PRIVATE "${TBB_ROOT_DIR}")
 target_link_libraries(Exchange PRIVATE lob_core TBB::tbb)
 if(WIN32)
     target_link_libraries(Exchange PRIVATE ws2_32)
@@ -60,3 +76,4 @@ if(WIN32 AND TARGET TBB::tbb)
                 $<TARGET_FILE:TBB::tbb> $<TARGET_FILE_DIR:Exchange>
         COMMENT "Copying TBB runtime next to Exchange")
 endif()
+
