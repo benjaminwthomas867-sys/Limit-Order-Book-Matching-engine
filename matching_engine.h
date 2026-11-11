@@ -10,17 +10,6 @@
 #include <iterator>
 #include <chrono>
 
-
-struct Receipt{
-        std::string timestamp;
-        double price_level;
-        std::string resting_order_id;
-        std::string aggresive_order_id;
-        int quantity;
-};
-
-
-
 std::list<Receipt> matching_engine(orderStruct new_order,LOB& working_book);
 
 #endif
