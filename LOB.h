@@ -72,7 +72,8 @@ struct lookup_node{
 struct data_request {
     int function;
 };
-
+// 1 for new login  , 2 for login, 3 for get ask price, 4 for get bid price, 5 for get receipts
+// error codes: -1 for invalid username, -2 for invalid password, -3 for invalid connection,
 struct fill_details : public data_request {
     char new_username[64];
     char hashed_password[256];
