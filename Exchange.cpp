@@ -20,12 +20,9 @@
 
 using namespace oneapi::tbb;
 
-// Concurrent hashmap of order books (one LOB per equity).
-// The accessor is local to each call - it is a lock handle, not shared state.
 concurrent_hash_map<std::string, LOB> Exchange;
 
-// Keyed by Receipt::receipt_id. std::unordered_map is NOT thread safe, so every
-// access must hold Receipts_mutex.
+
 std::unordered_map<std::string, Receipt> Receipts;
 std::mutex Receipts_mutex;
 
@@ -74,26 +71,6 @@ Turn take_ticket(const std::string& equity) {
 }
 
 
-struct data_request {
-    int function;
-};
-
-struct fill_details : public data_request {
-    char new_username[64];
-    char hashed_password[256];
-    char DOB[32];
-    char First_name[32];
-    char Second_name[32];
-};
-
-struct login_request : public data_request {
-    char username[64];
-    char password[256];
-};
-
-
-// 1 for new login  , 2 for login, 3 for get ask price, 4 for get bid price, 5 for get receipts
-// error codes: -1 for invalid username, -2 for invalid password, -3 for invalid connection,
 
 
 bool valid_order(orderStruct order) {
