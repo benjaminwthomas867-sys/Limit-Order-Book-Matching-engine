@@ -31,8 +31,8 @@
     }
 
     void LOB:: add_sell_order(orderStruct order){
-        if(!buy_map.contains(order.price)){
-                buy_map.emplace(order.price,std::list<orderStruct>{} );
+        if(!sell_map.contains(order.price)){
+                sell_map.emplace(order.price,std::list<orderStruct>{} );
             }
             lookup.emplace(order.code, lookup_node{0,order.price,sell_map[order.price].insert(sell_map[order.price].end(),order)});
 
@@ -48,8 +48,8 @@
 
     void LOB::destroy_sell_order(std::string code){ // destroys sell order
                     sell_map[lookup[code].pricelevel].erase(lookup[code].iter);
-            if(buy_map[lookup[code].pricelevel].empty()){
-                buy_map.erase(lookup[code].pricelevel);
+            if(sell_map[lookup[code].pricelevel].empty()){
+                sell_map.erase(lookup[code].pricelevel);
             }
     }
 
