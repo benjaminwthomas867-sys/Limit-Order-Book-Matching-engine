@@ -35,6 +35,7 @@ struct orderStruct {
         std::strcpy(code, hash_string.c_str());
 
     }
+orderStruct() = default;
 };
 
 long long make_timestamp();
