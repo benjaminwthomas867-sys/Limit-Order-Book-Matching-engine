@@ -1,9 +1,15 @@
-
 #include "LOB.h"
 
 #include <random>
 #include <unordered_map>
 #include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <memory>
+#include <cstdint>
+#include <iostream>
+#include <string>
+#include <list>
 #include "include/oneapi/tbb/concurrent_hash_map.h"
 #include "include/oneapi/tbb/blocked_range.h"
 #include "include/oneapi/tbb/parallel_for.h"
@@ -13,10 +19,59 @@
 #pragma comment(lib, "ws2_32.lib")
 
 using namespace oneapi::tbb;
-//Concurrent hashmap
-concurrent_hash_map<std::string,LOB> Exchange;
-concurrent_hash_map<std::string,LOB>::accessor accessor_Exchange;
-std::unordered_map<std::string,orderStruct> Receipts;
+
+// Concurrent hashmap of order books (one LOB per equity).
+// The accessor is local to each call - it is a lock handle, not shared state.
+concurrent_hash_map<std::string, LOB> Exchange;
+
+// Keyed by Receipt::receipt_id. std::unordered_map is NOT thread safe, so every
+// access must hold Receipts_mutex.
+std::unordered_map<std::string, Receipt> Receipts;
+std::mutex Receipts_mutex;
+
+
+std::mutex cout_mutex;
+
+struct EquityGate {
+    std::mutex m;
+    std::condition_variable cv;
+    std::uint64_t next_ticket = 0; 
+    std::uint64_t now_serving = 0;  
+};
+
+std::mutex gates_mutex;
+std::unordered_map<std::string, std::unique_ptr<EquityGate>> gates;
+
+
+class Turn {
+    EquityGate* gate;
+    std::uint64_t number;
+public:
+    Turn(EquityGate* g, std::uint64_t n) : gate(g), number(n) {}
+    Turn(const Turn&) = delete;
+    Turn& operator=(const Turn&) = delete;
+
+    void wait() {
+        std::unique_lock<std::mutex> lk(gate->m);
+        gate->cv.wait(lk, [&] { return gate->now_serving == number; });
+    }
+
+    ~Turn() {
+        {
+            std::lock_guard<std::mutex> lk(gate->m);
+            ++gate->now_serving;
+        }
+        gate->cv.notify_all();
+    }
+};
+
+
+Turn take_ticket(const std::string& equity) {
+    std::lock_guard<std::mutex> lk(gates_mutex);
+    auto& slot = gates[equity];
+    if (!slot) slot = std::make_unique<EquityGate>();
+    return Turn(slot.get(), slot->next_ticket++);
+}
 
 
 struct data_request {
@@ -37,67 +92,136 @@ struct login_request : public data_request {
 };
 
 
+// 1 for new login  , 2 for login, 3 for get ask price, 4 for get bid price, 5 for get receipts
+// error codes: -1 for invalid username, -2 for invalid password, -3 for invalid connection,
 
-// 1 for new login  , 2 for login, 3 for get ask price, 4 for get bid price, 5 for get receipts 
-    // error codes: -1 for invalid username, -2 for invalid password, -3 for invalid connection, 
+
+bool valid_order(orderStruct order) {
+    return order.price > 0 && order.quantity > 0 && order.resting == 0;
+}
 
 
-bool valid_order(orderStruct order){
-    if(order.price > 0 && order.quantity > 0 && order.resting == 0){
-        return 1;
-    }else{
-        return 0;
+void Trade(orderStruct order1, LOB& working_book) {
+    if (valid_order(order1)) {
+        matching_engine(order1, working_book);
     }
 }
 
 
-void Trade(orderStruct order1, LOB working_book){
-
-    if(valid_order(order1)){
-    matching_engine(order1,working_book);
-    }
-}
-
-void process_order(orderStruct incoming_order){
-    if(valid_order(incoming_order)){
-        restart:
-        if(Exchange.find(accessor_Exchange, incoming_order.intended_equity)){
-        LOB& working_book = accessor_Exchange -> second;
-        std::list receipts = matching_engine(incoming_order,working_book);
-    
-    }else{
-        Exchange.insert(std::make_pair(incoming_order.intended_equity, LOB(incoming_order.intended_equity)));
-        goto restart;
-    }
-    }
-    else{
-        std::cerr << "invalid order";
-    }
-
-
+std::string equity_key(const orderStruct& order) {
+    return std::string(order.intended_equity,
+                       strnlen(order.intended_equity, sizeof(order.intended_equity)));
 }
 
 
+bool process_order(orderStruct incoming_order) {
+    if (!valid_order(incoming_order)) {
+        std::lock_guard<std::mutex> lock(cout_mutex);
+        std::cerr << "invalid order\n";
+        return false;
+    }
+
+    const std::string equity = equity_key(incoming_order);
+
+    Turn turn = take_ticket(equity);
+
+    {
+        std::lock_guard<std::mutex> lock(cout_mutex);
+        std::cout << "[ORDER RECEIVED]\n"
+                  << "  Equity: " << equity << "\n"
+                  << "  Buy/Sell: " << (incoming_order.buy ? "Buy" : "Sell") << "\n"
+                  << "  Quantity: " << incoming_order.quantity << "\n"
+                  << "  Price: " << incoming_order.price << "\n"
+                  << "  Code: " << incoming_order.code << "\n";
+    }
+
+    turn.wait();
+
+    std::list<Receipt> receipts;
+    {
+
+        concurrent_hash_map<std::string, LOB>::accessor acc;
+        Exchange.insert(acc, std::make_pair(equity, LOB(equity)));
+
+        LOB& working_book = acc->second;
+        receipts = matching_engine(incoming_order, working_book);
+    } 
+
+    if (!receipts.empty()) {
+        std::lock_guard<std::mutex> lock(Receipts_mutex);
+        for (const Receipt& r : receipts) {
+            Receipts.emplace(r.receipt_id, r);
+        }
+    }
+    return true;
+} 
+
+void handle_client(SOCKET ClientSocket) {
+
+    char buffer[1024] = {};
+    int bytesReceived = recv(ClientSocket, buffer, sizeof(buffer) - 1, 0);
+
+    if (bytesReceived > 0) {
+        double responseValue = -3.0; 
+
+        if (bytesReceived == sizeof(orderStruct)) {
+            orderStruct order;
+            std::memcpy(&order, buffer, sizeof(orderStruct));
+
+            order.person_id[sizeof(order.person_id) - 1] = '\0';
+            order.code[sizeof(order.code) - 1] = '\0';
+            order.intended_equity[sizeof(order.intended_equity) - 1] = '\0';
+
+            responseValue = process_order(order) ? 1.0 : -1.0;
+        }
+        else {
+            data_request* req = reinterpret_cast<data_request*>(buffer);
+
+            std::lock_guard<std::mutex> lock(cout_mutex);
+            switch (req->function) {
+                case 1: {
+                    fill_details* details = reinterpret_cast<fill_details*>(buffer);
+                    std::cout << "[NEW LOGIN] Username: " << details->new_username << "\n";
+                    responseValue = 1.0;
+                    break;
+                }
+                case 2: { 
+                    login_request* login = reinterpret_cast<login_request*>(buffer);
+                    std::cout << "[LOGIN REQUEST] Username: " << login->username << "\n";
+                    responseValue = 1.0;
+                    break;
+                }
+                case 3: { 
+                    std::cout << "[BID PRICE REQUEST]\n";
+                    responseValue = 150.25;
+                    break;
+                }
+                case 4: { 
+                    std::cout << "[ASK PRICE REQUEST]\n";
+                    responseValue = 150.50; 
+                    break;
+                }
+                default:
+                    std::cout << "[UNKNOWN REQUEST] Function ID: " << req->function << "\n";
+                    responseValue = -1.0;
+                    break;
+            }
+        }
+        send(ClientSocket, reinterpret_cast<const char*>(&responseValue), sizeof(responseValue), 0);
+    }
+
+    closesocket(ClientSocket);
+}
 
 
-
-
-
-
-
-
-
-
-int main(){
-
-WSADATA wsaData;
+int main() {
+    WSADATA wsaData;
     int iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (iResult != 0) {
         std::cerr << "WSAStartup failed: " << iResult << "\n";
         return 1;
     }
 
-    // 2. Create Listening Socket
     SOCKET ListenSocket = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (ListenSocket == INVALID_SOCKET) {
         std::cerr << "Socket creation failed: " << WSAGetLastError() << "\n";
@@ -105,11 +229,10 @@ WSADATA wsaData;
         return 1;
     }
 
-    // 3. Bind Socket
     sockaddr_in serverService;
     serverService.sin_family = AF_INET;
-    serverService.sin_addr.s_addr = inet_addr("127.0.0.1"); // Or INADDR_ANY
-    serverService.sin_port = htons(8080); // Matching your client's port
+    serverService.sin_addr.s_addr = inet_addr("127.0.0.1"); 
+    serverService.sin_port = htons(8080);
 
     if (bind(ListenSocket, (SOCKADDR*)&serverService, sizeof(serverService)) == SOCKET_ERROR) {
         std::cerr << "Bind failed: " << WSAGetLastError() << "\n";
@@ -118,7 +241,6 @@ WSADATA wsaData;
         return 1;
     }
 
-    // 4. Listen for Connections
     if (listen(ListenSocket, SOMAXCONN) == SOCKET_ERROR) {
         std::cerr << "Listen failed: " << WSAGetLastError() << "\n";
         closesocket(ListenSocket);
@@ -128,87 +250,27 @@ WSADATA wsaData;
 
     std::cout << "Server is listening on port 8080...\n";
 
-    // 5. Server Main Loop
     while (true) {
         SOCKET ClientSocket = accept(ListenSocket, NULL, NULL);
         if (ClientSocket == INVALID_SOCKET) {
+            std::lock_guard<std::mutex> lock(cout_mutex);
             std::cerr << "Accept failed: " << WSAGetLastError() << "\n";
             continue;
         }
 
-        // Buffer large enough to hold the largest structure (fill_details or orderStruct)
-        char buffer[1024];
-        int bytesReceived = recv(ClientSocket, buffer, sizeof(buffer), 0);
-
-        if (bytesReceived > 0) {
-            double responseValue = -3.0; // Default error/failure response
-
-            // Determine if it's an orderStruct or a data_request based on the size
-            // (orderStruct size differs from data_request / login_request / fill_details)
-            if (bytesReceived == sizeof(orderStruct)) {
-                orderStruct* order = reinterpret_cast<orderStruct*>(buffer);
-                std::cout << "[ORDER RECEIVED]\n"
-                          << "  Equity: " << order->intended_equity << "\n"
-                          << "  Buy/Sell: " << (order->buy ? "Buy" : "Sell") << "\n"
-                          << "  Quantity: " << order->quantity << "\n"
-                          << "  Price: " << order->price << "\n"
-                          << "  Code: " << order->code << "\n";
-                
-                responseValue = 1.0; // Success response for order
-            } 
-            else {
-                // It's a standard data_request (login, create_login, get_bid, get_ask)
-                data_request* req = reinterpret_cast<data_request*>(buffer);
-                
-                switch (req->function) {
-                    case 1: { // Create Login
-                        fill_details* details = reinterpret_cast<fill_details*>(buffer);
-                        std::cout << "[NEW LOGIN] Username: " << details->new_username << "\n";
-                        responseValue = 1.0; // Success
-                        break;
-                    }
-                    case 2: { // Login
-                        login_request* login = reinterpret_cast<login_request*>(buffer);
-                        std::cout << "[LOGIN REQUEST] Username: " << login->username << "\n";
-                        responseValue = 1.0; // Success
-                        break;
-                    }
-                    case 3: { // Get Bid Price
-                        std::cout << "[BID PRICE REQUEST]\n";
-                        responseValue = 150.25; // Dummy bid price example (> 0 means success)
-                        break;
-                    }
-                    case 4: { // Get Ask Price
-                        std::cout << "[ASK PRICE REQUEST]\n";
-                        responseValue = 150.50; // Dummy ask price example (> 0 means success)
-                        break;
-                    }
-                    default:
-                        std::cout << "[UNKNOWN REQUEST] Function ID: " << req->function << "\n";
-                        responseValue = -1.0;
-                        break;
-                }
-            }
-
-            // Send response back to the client (client expects a double)
-            send(ClientSocket, reinterpret_cast<const char*>(&responseValue), sizeof(responseValue), 0);
+        try {
+            std::thread(handle_client, ClientSocket).detach();
+        } catch (const std::system_error& e) {
+            std::lock_guard<std::mutex> lock(cout_mutex);
+            std::cerr << "Failed to create thread: " << e.what() << "\n";
+            closesocket(ClientSocket);
         }
-
-        // Close the client connection
-        closesocket(ClientSocket);
     }
 
-    // Cleanup (unreachable in this infinite loop example, but good practice)
     closesocket(ListenSocket);
     WSACleanup();
-
-
-
+    return 0;
 }
-
-    // Socket programming to be written here - receive Order, then call matching engine on it - verify that it is a valid order. and then upload the receipts to the unordered_map for receipts.
-
-
 
 
 
